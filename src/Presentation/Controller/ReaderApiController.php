@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace App\Presentation\Controller;
 
 use App\Infrastructure\Persistence\Doctrine\Entity\Reader;
+use App\Presentation\Request\CreateReaderRequest;
+use Doctrine\DBAL\Exception\UniqueConstraintViolationException;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
@@ -26,26 +28,44 @@ class ReaderApiController extends AbstractController
     public function create(Request $request): JsonResponse
     {
         $payload = json_decode($request->getContent(), true);
+        if (! is_array($payload)) {
+            return $this->json([
+                'error' => 'Invalid JSON.',
+            ], Response::HTTP_BAD_REQUEST);
+        }
 
-        $reader = new Reader(
+        $createReaderRequest = new CreateReaderRequest(
             $payload['first_name'] ?? '',
             $payload['last_name'] ?? '',
             $payload['email'] ?? '',
             $payload['library_card_number'] ?? ''
         );
 
-        $errors = $this->validator->validate($reader);
+        $errors = $this->validator->validate($createReaderRequest);
         if (count($errors) > 0) {
             return $this->json([
                 'errors' => (string) $errors,
             ], Response::HTTP_BAD_REQUEST);
         }
 
-        $this->em->persist($reader);
-        $this->em->flush();
+        $reader = new Reader(
+            $createReaderRequest->firstName,
+            $createReaderRequest->lastName,
+            $createReaderRequest->email,
+            $createReaderRequest->libraryCardNumber
+        );
+
+        try {
+            $this->em->persist($reader);
+            $this->em->flush();
+        } catch (UniqueConstraintViolationException) {
+            return $this->json([
+                'error' => 'A reader with the given email or library card number already exists.',
+            ], Response::HTTP_CONFLICT);
+        }
 
         return $this->json([
-            'status' => 'Czytelnik dodany',
+            'status' => 'Reader created',
             'id' => $reader->getId(),
             'library_card_number' => $reader->getLibraryCardNumber(),
         ], Response::HTTP_CREATED);

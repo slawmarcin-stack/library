@@ -76,6 +76,7 @@
         "behat/behat": "^4.0@alpha",
         "phpunit/phpunit": "^11.5",
         "symfony/browser-kit": "^8.1",
-        "symfony/css-selector": "^8.1"
+        "symfony/css-selector": "^8.1",
+        "symfony/maker-bundle": "^1.67"
     }
 }

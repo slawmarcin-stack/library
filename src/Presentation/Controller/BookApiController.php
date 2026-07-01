@@ -5,15 +5,19 @@ declare(strict_types=1);
 namespace App\Presentation\Controller;
 
 use App\Application\Command\AddBook\AddBookCommand;
+use App\Application\Command\BorrowBook\BookNotFoundException;
+use App\Application\Command\BorrowBook\BorrowBookCommand;
+use App\Application\Command\BorrowBook\ReaderNotFoundException;
 use App\Application\Dto\BookDto;
-use App\Infrastructure\Persistence\Doctrine\Entity\Reader;
 use App\Infrastructure\Persistence\Doctrine\Repository\BookRepository;
 use App\Presentation\Request\CreateBookRequest;
+use Doctrine\DBAL\Exception\UniqueConstraintViolationException;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
+use Symfony\Component\Messenger\Exception\HandlerFailedException;
 use Symfony\Component\Messenger\MessageBusInterface;
 use Symfony\Component\Routing\Attribute\Route;
 use Symfony\Component\Validator\Validator\ValidatorInterface;
@@ -34,29 +38,19 @@ class BookApiController extends AbstractController
     {
         $books = $this->bookRepository->findAllWithCurrentLoanStatus();
 
-        $bookDtos = array_map(static function (array $book): BookDto {
-            $borrowedAt = null;
-            if ($book['borrowed_at'] instanceof \DateTimeInterface) {
-                $borrowedAt = $book['borrowed_at']->format(\DateTimeInterface::ATOM);
-            } elseif (is_string($book['borrowed_at'])) {
-                $borrowedAt = $book['borrowed_at'];
-            }
-
-            $readerName = null;
-            if (! empty($book['reader_first_name']) || ! empty($book['reader_last_name'])) {
-                $readerName = trim(sprintf('%s %s', $book['reader_first_name'] ?? '', $book['reader_last_name'] ?? ''));
-            }
+        $bookDtos = array_map(function (array $book): BookDto {
+            $currentLoan = is_array($book['current_loan'] ?? null) ? $book['current_loan'] : null;
 
             return new BookDto(
                 $book['id'] ?? null,
                 $book['serial_number'],
                 $book['title'],
                 $book['author'],
-                $borrowedAt !== null,
-                $borrowedAt,
-                $book['library_card_number'] ?? null,
-                $book['reader_id'] ?? null,
-                $readerName
+                $this->resolveBorrowedAt($book, $currentLoan) !== null,
+                $this->resolveBorrowedAt($book, $currentLoan),
+                $this->resolveBorrowedBy($book, $currentLoan),
+                $this->resolveReaderId($book, $currentLoan),
+                $this->resolveReaderName($book, $currentLoan)
             );
         }, $books);
 
@@ -69,7 +63,7 @@ class BookApiController extends AbstractController
         $payload = json_decode($request->getContent(), true);
         if (! is_array($payload)) {
             return $this->json([
-                'error' => 'Niepoprawny JSON.',
+                'error' => 'Invalid JSON.',
             ], Response::HTTP_BAD_REQUEST);
         }
 
@@ -86,14 +80,29 @@ class BookApiController extends AbstractController
             ], Response::HTTP_BAD_REQUEST);
         }
 
-        $this->commandBus->dispatch(new AddBookCommand(
-            $createBookRequest->serialNumber,
-            $createBookRequest->title,
-            $createBookRequest->author,
-        ));
+        try {
+            $this->commandBus->dispatch(new AddBookCommand(
+                $createBookRequest->serialNumber,
+                $createBookRequest->title,
+                $createBookRequest->author,
+            ));
+        } catch (HandlerFailedException $exception) {
+            $previous = $exception->getPrevious();
+            if ($previous instanceof UniqueConstraintViolationException) {
+                return $this->json([
+                    'error' => 'A book with the given serial number already exists.',
+                ], Response::HTTP_CONFLICT);
+            }
+
+            throw $exception;
+        } catch (UniqueConstraintViolationException) {
+            return $this->json([
+                'error' => 'A book with the given serial number already exists.',
+            ], Response::HTTP_CONFLICT);
+        }
 
         return $this->json([
-            'status' => 'Książka dodana',
+            'status' => 'Book created',
             'book' => new BookDto(
                 null,
                 $createBookRequest->serialNumber,
@@ -114,7 +123,7 @@ class BookApiController extends AbstractController
         $book = $this->bookRepository->find($id);
         if (! $book) {
             return $this->json([
-                'error' => 'Książka nie została znaleziona.',
+                'error' => 'Book not found.',
             ], Response::HTTP_NOT_FOUND);
         }
 
@@ -122,48 +131,55 @@ class BookApiController extends AbstractController
         $this->em->flush();
 
         return $this->json([
-            'status' => 'Książka usunięta',
+            'status' => 'Book deleted',
         ]);
     }
 
     #[Route('/{id}/borrow', name: 'borrow', methods: ['PATCH'])]
     public function borrowBook(string $id, Request $request): JsonResponse
     {
-        $book = $this->bookRepository->find($id);
-        if (! $book) {
-            return $this->json([
-                'error' => 'Książka nie została znaleziona.',
-            ], Response::HTTP_NOT_FOUND);
-        }
-
         $payload = json_decode($request->getContent(), true);
+        if (! is_array($payload)) {
+            return $this->json([
+                'error' => 'Invalid JSON.',
+            ], Response::HTTP_BAD_REQUEST);
+        }
 
         $cardNumber = $payload['card_number'] ?? null;
         if (! $cardNumber) {
             return $this->json([
-                'error' => 'Brak identyfikatora czytelnika.',
+                'error' => 'Missing reader identifier.',
             ], Response::HTTP_BAD_REQUEST);
         }
 
-        $reader = $this->em->getRepository(Reader::class)->findByLibraryCardNumber($cardNumber);
-        if (! $reader) {
-            return $this->json([
-                'error' => 'Czytelnik nie został znaleziony.',
-            ], Response::HTTP_NOT_FOUND);
+        try {
+            $this->commandBus->dispatch(new BorrowBookCommand($id, (string) $cardNumber));
+        } catch (HandlerFailedException $exception) {
+            $previous = $exception->getPrevious();
+
+            if ($previous instanceof BookNotFoundException) {
+                return $this->json([
+                    'error' => 'Book not found.',
+                ], Response::HTTP_NOT_FOUND);
+            }
+
+            if ($previous instanceof ReaderNotFoundException) {
+                return $this->json([
+                    'error' => 'Reader not found.',
+                ], Response::HTTP_NOT_FOUND);
+            }
+
+            if ($previous instanceof \DomainException) {
+                return $this->json([
+                    'error' => 'The book is already borrowed.',
+                ], Response::HTTP_CONFLICT);
+            }
+
+            throw $exception;
         }
 
-        if ($book->isBorrowed()) {
-            return $this->json([
-                'error' => 'Książka jest już wypożyczona.',
-            ], Response::HTTP_CONFLICT);
-        }
-
-        $loan = $book->borrow($reader);
-        $this->em->persist($loan);
-
-        $this->em->flush();
         return $this->json([
-            'status' => 'Książka została wypożyczona.',
+            'status' => 'Book borrowed',
         ]);
     }
 
@@ -173,7 +189,7 @@ class BookApiController extends AbstractController
         $book = $this->bookRepository->find($id);
         if (! $book) {
             return $this->json([
-                'error' => 'Książka nie została znaleziona.',
+                'error' => 'Book not found.',
             ], Response::HTTP_NOT_FOUND);
         }
 
@@ -181,7 +197,38 @@ class BookApiController extends AbstractController
 
         $this->em->flush();
         return $this->json([
-            'status' => 'Książka została zwrócona.',
+            'status' => 'Book returned',
         ]);
+    }
+
+    private function resolveBorrowedAt(array $book, ?array $currentLoan): ?string
+    {
+        $borrowedAtSource = $book['borrowed_at'] ?? ($currentLoan['borrowed_at'] ?? null);
+
+        if ($borrowedAtSource instanceof \DateTimeInterface) {
+            return $borrowedAtSource->format(\DateTimeInterface::ATOM);
+        }
+
+        if (is_string($borrowedAtSource)) {
+            return $borrowedAtSource;
+        }
+
+        return null;
+    }
+
+    private function resolveBorrowedBy(array $book, ?array $currentLoan): ?string
+    {
+        return $book['borrowed_by'] ?? $book['library_card_number'] ?? ($currentLoan['library_card_number'] ?? null);
+    }
+
+    private function resolveReaderId(array $book, ?array $currentLoan): ?string
+    {
+        return $book['reader_id'] ?? ($currentLoan['reader_id'] ?? null);
+    }
+
+    private function resolveReaderName(array $book, ?array $currentLoan): ?string
+    {
+        return $currentLoan['reader_name']
+            ?? trim(sprintf('%s %s', $book['reader_first_name'] ?? '', $book['reader_last_name'] ?? ''));
     }
 }

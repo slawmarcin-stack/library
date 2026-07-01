@@ -43,7 +43,7 @@ class Loan
     public function returnBook(): void
     {
         if ($this->returnedAt !== null) {
-            throw new \LogicException('Ta książka została już wcześniej zwrócona.');
+            throw new \LogicException('This book has already been returned.');
         }
 
         $this->returnedAt = new \DateTimeImmutable();

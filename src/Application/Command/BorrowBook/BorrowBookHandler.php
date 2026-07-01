@@ -4,29 +4,35 @@ declare(strict_types=1);
 
 namespace App\Application\Command\BorrowBook;
 
-use App\Domain\Model\BookId;
-use App\Domain\Model\LibraryCard;
-use App\Domain\Repository\BookRepositoryInterface;
+use App\Infrastructure\Persistence\Doctrine\Entity\Reader;
+use App\Infrastructure\Persistence\Doctrine\Repository\BookRepository;
+use Doctrine\ORM\EntityManagerInterface;
+use Symfony\Component\Messenger\Attribute\AsMessageHandler;
 
+#[AsMessageHandler(handles: BorrowBookCommand::class)]
 final class BorrowBookHandler
 {
     public function __construct(
-        private BookRepositoryInterface $repository
+        private BookRepository $bookRepository,
+        private EntityManagerInterface $entityManager
     ) {
     }
 
     public function __invoke(BorrowBookCommand $command): void
     {
-        $bookId = BookId::fromString($command->getBookId());
-        $book = $this->repository->find($bookId);
+        $book = $this->bookRepository->find($command->getBookId())
+            ?? throw new BookNotFoundException();
 
-        if (! $book) {
+        $reader = $this->entityManager->getRepository(Reader::class)->findOneBy([
+            'libraryCardNumber' => $command->getLibraryCardNumber(),
+        ]) ?? throw new ReaderNotFoundException();
+
+        if (! $reader instanceof Reader) {
             throw new BookNotFoundException();
         }
 
-        $libraryCard = new LibraryCard($command->getLibraryCardNumber());
-        $book->borrow($libraryCard);
-
-        $this->repository->save($book);
+        $loan = $book->borrow($reader);
+        $this->entityManager->persist($loan);
+        $this->entityManager->flush();
     }
 }
