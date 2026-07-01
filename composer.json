@@ -16,6 +16,7 @@
         "symfony/framework-bundle": "8.1.*",
         "symfony/messenger": "8.1.*",
         "symfony/runtime": "8.1.*",
+        "symfony/uid": "^8.1",
         "symfony/validator": "8.1.*",
         "symfony/yaml": "8.1.*"
     },
@@ -70,5 +71,11 @@
             "allow-contrib": false,
             "require": "8.1.*"
         }
+    },
+    "require-dev": {
+        "behat/behat": "^4.0@alpha",
+        "phpunit/phpunit": "^11.5",
+        "symfony/browser-kit": "^8.1",
+        "symfony/css-selector": "^8.1"
     }
 }

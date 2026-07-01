@@ -1,0 +1,24 @@
+#!/usr/bin/env sh
+set -eu
+
+RUNTIME_DIR="/tmp/ecs-runtime"
+
+if [ ! -x "$RUNTIME_DIR/vendor/bin/ecs" ]; then
+	rm -rf "$RUNTIME_DIR"
+	mkdir -p "$RUNTIME_DIR"
+	cat > "$RUNTIME_DIR/composer.json" <<'JSON'
+{
+	"require-dev": {
+		"symplify/easy-coding-standard": "^12"
+	}
+}
+JSON
+
+	COMPOSER_PROCESS_TIMEOUT=1800 composer install \
+		--working-dir="$RUNTIME_DIR" \
+		--prefer-dist \
+		--no-interaction \
+		--no-progress
+fi
+
+exec "$RUNTIME_DIR/vendor/bin/ecs" "$@"

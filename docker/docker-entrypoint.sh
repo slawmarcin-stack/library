@@ -7,10 +7,5 @@ until php -r "\$fp = @fsockopen('database', 5432, \$errno, \$errstr, 2); if (\$f
   sleep 1
 done
 
-echo "Database is ready! Running Symfony commands..."
-
-php bin/console doctrine:database:create --if-not-exists --no-interaction
-php bin/console doctrine:schema:update --force --no-interaction
-
-echo "Migrations and schema update completed. Starting the application..."
+echo "Database is ready! Starting the application..."
 exec "$@"
