@@ -4,3 +4,12 @@ Zakładam że powinna być też opcja ręcznego oznaczania książek jako niekat
 Zastosowałem tabelę Loan do przechowywania informacji o wypożyczeniach. Dzięki temu w przyszłości możemy utworzyć np. podstronę z historię użytkownika czy historią wypożyczeń książki.
 
 Zgodnie z założeniem zadania nie tworzyłem uwierzytelniania.
+
+## Endpointy API
+
+- GET /api/books
+- POST /api/books
+- DELETE /api/books/{id}
+- PATCH /api/books/{id}/borrow
+- PATCH /api/books/{id}/return
+- POST /api/readers
